@@ -1,0 +1,27 @@
+_format_version: "2.1"
+_info:
+  select_tags:
+    - supabase
+consumers:
+  - username: anon
+  - username: service_role
+keyauth_credentials:
+  - consumer: anon
+    key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzc4MDQ4ODQwLCJleHAiOjIwOTM0MDg4NDB9.IYqc2Saallr3nUpESiyikTA6o-TgEzUfxgHYP06iGeo
+  - consumer: service_role
+    key:
+services:
+  - name: auth-v1
+    url: http://supabase-auth:9999
+    routes:
+      - name: auth-v1-route
+        paths:
+          - /auth/v1
+        strip_path: true
+  - name: rest-v1
+    url: http://supabase-rest:3000
+    routes:
+      - name: rest-v1-route
+        paths:
+          - /rest/v1
+        strip_path: true
