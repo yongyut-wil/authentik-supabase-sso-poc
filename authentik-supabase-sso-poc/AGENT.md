@@ -9,14 +9,14 @@ This project is a Proof of Concept (POC) demonstrating how to use Authentik as a
 
 1. **Authentik Setup**: Provides standard OpenID Connect (OIDC) capabilities. Runs via `authentik-server`, `authentik-worker`, `authentik-postgresql`, and `authentik-redis`.
 2. **Supabase Setup**: Minimal deployment using `supabase-db` (Postgres), `supabase-auth` (GoTrue), `supabase-rest` (PostgREST), and `supabase-kong` (API Gateway).
-3. **Nginx OIDC-Proxy (`oidc-proxy`)**: The critical translation layer. GoTrue's Keycloak provider hardcodes paths like `/protocol/openid-connect/*`. The proxy catches these and forwards them to Authentik's `/application/o/*` paths.
+3. **Caddy OIDC-Proxy (`oidc-proxy`)**: The critical translation layer. GoTrue's Keycloak provider hardcodes paths like `/protocol/openid-connect/*`. The proxy catches these and forwards them to Authentik's `/application/o/*` paths.
 4. **React Router v7 Web App (`web`)**: A custom frontend application. It handles the manual redirect hack: GoTrue initially redirects to the docker-internal `http://oidc-proxy/...` URL, which the browser cannot resolve. The SSR backend intercepts this, replaces the hostname with `localhost:9000`, and then redirects the browser.
 
 ## Critical Constraints to Maintain
 
-* **Nginx Routing Context (`volumes/oidc-proxy/nginx.conf`)**:
+* **Caddy Routing Context (`volumes/oidc-proxy/caddy.conf`)**:
   - Do NOT modify the `/protocol/openid-connect/` path mappings unless Authentik changes its OIDC specification.
-  - The `certs` block explicitly proxies to `/application/o/poc/jwks/`. This implies the Authentik application slug MUST be strictly named `poc`. If you change the application slug, you must update the Nginx configuration.
+  - The `certs` block explicitly proxies to `/application/o/poc/jwks/`. This implies the Authentik application slug MUST be strictly named `poc`. If you change the application slug, you must update the Caddy configuration.
 * **Kong JWT Credentials (`volumes/supabase/kong.yml`)**:
   - The API Gateway is configured with `anon` and `service_role` consumers mapped to the JWTs in the `.env` file. If the `.env` keys change, `kong.yml` must be updated to match, otherwise GoTrue and PostgREST will reject requests.
 * **Web App Dependencies**:

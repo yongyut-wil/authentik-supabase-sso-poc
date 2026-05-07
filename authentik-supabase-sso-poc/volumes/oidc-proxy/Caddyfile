@@ -1,0 +1,58 @@
+# Caddyfile สำหรับทำ OIDC Proxy ระหว่าง GoTrue (Keycloak format) และ Authentik
+
+http://oidc-proxy:80 {
+    # ── 1. OIDC discovery ─────────────────────────────────
+    # เมื่อ GoTrue ร้องขอข้อมูล Discovery ผ่าน Path ปกติ
+    # เราจะทำการ Rewrite ให้ชี้ไปยัง Path ของ Authentik (สำหรับ Application ชื่อ poc)
+    handle /.well-known/openid-configuration {
+        rewrite * /application/o/poc/.well-known/openid-configuration
+        reverse_proxy http://authentik-server:9000 {
+            header_up Host authentik-server
+        }
+    }
+
+    # ── 2. Authorization endpoint ────────────────────────
+    # เปลี่ยน Path จากฝั่ง Keycloak ไปเป็น Authentik
+    # พร้อมกับแทรก scopes "openid profile email" เข้าไปเผื่อเอาไว้
+    # และใช้ Redirect 302 ไปหา Authentik โดยตรง
+    route /protocol/openid-connect/auth {
+        uri query scope "openid profile email"
+        redir http://authentik-server:9000/application/o/authorize/?{query} 302
+    }
+
+    # ── 3. Token endpoint ────────────────────────────────
+    # รับ Request แลก Token จาก GoTrue (ซึ่งเรียกมาแบบ Keycloak path)
+    # แล้ว Rewrite ไปหา Token Endpoint ของ Authentik
+    handle /protocol/openid-connect/token {
+        rewrite * /application/o/token/
+        reverse_proxy http://authentik-server:9000 {
+            header_up Host authentik-server
+        }
+    }
+
+    # ── 4. UserInfo endpoint ─────────────────────────────
+    # แปลง Request ที่ดึงข้อมูล UserInfo (Keycloak path) ให้ชี้ไปที่ Authentik
+    handle /protocol/openid-connect/userinfo {
+        rewrite * /application/o/userinfo/
+        reverse_proxy http://authentik-server:9000 {
+            header_up Host authentik-server
+        }
+    }
+
+    # ── 5. JWKS / Certs endpoint ─────────────────────────
+    # เพิ่มเติมจากตัวอย่าง: แปลง Path สำหรับ Keycloak certs ไปดึงจาก Authentik (Application "poc")
+    handle /protocol/openid-connect/certs {
+        rewrite * /application/o/poc/jwks/
+        reverse_proxy http://authentik-server:9000 {
+            header_up Host authentik-server
+        }
+    }
+
+    # ── 6. Catch-all: Authentik-native paths ─────────────
+    # เผื่อในกรณีที่ GoTrue เข้าถึง URL ที่ได้มาจาก Discovery document ตรงๆ
+    handle /application/o/* {
+        reverse_proxy http://authentik-server:9000 {
+            header_up Host authentik-server
+        }
+    }
+}

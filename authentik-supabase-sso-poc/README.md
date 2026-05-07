@@ -2,13 +2,13 @@
 
 โปรเจกต์นี้คือ Proof of Concept (POC) สำหรับการใช้งาน Supabase (GoTrue) ร่วมกับ Authentik เป็น Identity Provider (IdP) แบบ Self-hosted อย่างสมบูรณ์ผ่าน Single Sign-On (SSO) โดยไม่ต้องเชื่อมต่อกับระบบภายนอกอื่นๆ
 
-เนื่องจาก GoTrue v2 ไม่มี "authentik" provider อยู่ในตัวเอง โปรเจกต์นี้จึงใช้ Workaround โดยใช้ Keycloak provider ของ GoTrue แทน และใช้ Nginx เป็น `oidc-proxy` เพื่อทำการเปลี่ยน Paths (Rewrite paths) จาก Keycloak format ไปยัง Authentik format
+เนื่องจาก GoTrue v2 ไม่มี "authentik" provider อยู่ในตัวเอง โปรเจกต์นี้จึงใช้ Workaround โดยใช้ Keycloak provider ของ GoTrue แทน และใช้ Caddy เป็น `oidc-proxy` เพื่อทำการเปลี่ยน Paths (Rewrite paths) จาก Keycloak format ไปยัง Authentik format
 
 ## สถาปัตยกรรม (Architecture)
 โปรเจกต์นี้ใช้ Docker Compose ในการรัน Services หลักดังนี้:
 1. **Authentik**: IdP (PostgreSQL, Redis, Server, Worker)
 2. **Supabase**: Auth, Database, Rest API, Kong Gateway
-3. **Nginx oidc-proxy**: แปลง `/protocol/openid-connect/*` ไปเป็น `/application/o/*` ของ Authentik
+3. **Caddy oidc-proxy**: แปลง `/protocol/openid-connect/*` ไปเป็น `/application/o/*` ของ Authentik
 4. **Web App**: React Router v7 SSR สำหรับการทำ Frontend
 
 ---
@@ -72,7 +72,7 @@
 3. ไปที่เมนู **Applications > Applications**
    - คลิกปุ่ม **Create**
    - **Name**: กรอก `POC App`
-   - **Slug**: กรอก `poc`  *(❗ สำคัญมาก: ต้องใช้ชื่อนี้เท่านั้น เนื่องจาก Nginx ถูกเขียนให้เชื่อมโยงดึงค่า JWKS certs จาก URL `/application/o/poc/jwks/`)*
+   - **Slug**: กรอก `poc`  *(❗ สำคัญมาก: ต้องใช้ชื่อนี้เท่านั้น เนื่องจาก Caddy ถูกเขียนให้เชื่อมโยงดึงค่า JWKS certs จาก URL `/application/o/poc/jwks/`)*
    - **Provider**: เลือก `poc-provider` ที่เราเพิ่งสร้างขึ้น
    - กด **Create**
 
@@ -111,7 +111,7 @@
 
 1. **Path Translation (oidc-proxy)**:
    - Supabase (GoTrue) ฝัง Hardcode มาว่า Keycloak จะต้องใช้ Endpoint แบบ `/protocol/openid-connect/auth`
-   - เราใช้ Nginx (Service `oidc-proxy`) สร้าง Server ภายใน Docker รับ Request และ Proxy ไปยัง `/application/o/authorize/` ของ Authentik
+   - เราใช้ Caddy (Service `oidc-proxy`) สร้าง Server ภายใน Docker รับ Request และ Proxy ไปยัง `/application/o/authorize/` ของ Authentik
 2. **Server-Side URL Rewrite (Web App)**:
    - เนื่องจาก `oidc-proxy` เป็น Hostname ที่รู้จักเฉพาะในเครือข่าย Docker เท่านั้น Browser ไม่สามารถเข้าถึงได้โดยตรง
    - ใน Web App (React Router SSR) ไฟล์ `app/routes/auth.login.tsx` มีโค้ดสำหรับการแก้ปัญหานี้ โดยเมื่อกด SSO Server Node.js จะทำการ `fetch()` แบบ manual ไปยัง Supabase เพื่อเอา URL `http://oidc-proxy/...` มา จากนั้นใช้ Regular Expression ดึงเอาค่า `?search=...` Parameters มาต่อท้ายกับ `http://localhost:9000/application/o/authorize/` แล้วสั่งให้ Browser ทำการ Redirect ไปแทน
@@ -125,4 +125,4 @@
 - **GoTrue แจ้งเตือน Mailer error ใน Log ของ Docker**:
   - โปรเจกต์นี้ตั้งค่า `GOTRUE_MAILER_AUTOCONFIRM=true` ไว้ การสมัครสมาชิกจึงทำได้เลยโดยไม่ต้องส่งอีเมล แต่หากมีการล็อกอินผิด หรือ Request password reset มันจะพยายามต่อ SMTP และเกิด Error ซึ่งเป็นเรื่องปกติสำหรับการทำ POC ระดับโลคอล
 - **ล็อกอิน Authentik ผ่านแล้ว แต่พอกลับมา Supabase เกิด Error**:
-  - ตรวจสอบว่าในขั้นตอนสร้าง Application บน Authentik คุณได้ตั้งค่า Slug ให้เป็น `poc` หรือไม่ หากเป็นชื่ออื่น Nginx จะไม่สามารถดึง JWKS Certs ไป Validate Token ได้
+  - ตรวจสอบว่าในขั้นตอนสร้าง Application บน Authentik คุณได้ตั้งค่า Slug ให้เป็น `poc` หรือไม่ หากเป็นชื่ออื่น Caddy จะไม่สามารถดึง JWKS Certs ไป Validate Token ได้
