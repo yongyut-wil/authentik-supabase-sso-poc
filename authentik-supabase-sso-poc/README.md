@@ -2,13 +2,13 @@
 
 โปรเจกต์นี้คือ Proof of Concept (POC) สำหรับการใช้งาน Supabase (GoTrue) ร่วมกับ Authentik เป็น Identity Provider (IdP) แบบ Self-hosted อย่างสมบูรณ์ผ่าน Single Sign-On (SSO) โดยไม่ต้องเชื่อมต่อกับระบบภายนอกอื่นๆ
 
-เนื่องจาก GoTrue v2 ไม่มี "authentik" provider อยู่ในตัวเอง โปรเจกต์นี้จึงใช้ Workaround โดยใช้ Keycloak provider ของ GoTrue แทน และใช้ Caddy เป็น `oidc-proxy` เพื่อทำการเปลี่ยน Paths (Rewrite paths) จาก Keycloak format ไปยัง Authentik format
+เนื่องจาก GoTrue v2 ไม่มี "authentik" provider อยู่ในตัวเอง โปรเจกต์นี้จึงใช้ Workaround โดยใช้ Keycloak provider ของ GoTrue แทน และใช้ **Caddy** เป็น Reverse Proxy (`oidc-proxy`) เพื่อทำการเปลี่ยน Paths (Rewrite paths) จาก Keycloak format ไปยัง Authentik format ได้อย่างยืดหยุ่นและปลอดภัย
 
 ## สถาปัตยกรรม (Architecture)
 โปรเจกต์นี้ใช้ Docker Compose ในการรัน Services หลักดังนี้:
 1. **Authentik**: IdP (PostgreSQL, Redis, Server, Worker)
 2. **Supabase**: Auth, Database, Rest API, Kong Gateway
-3. **Caddy oidc-proxy**: แปลง `/protocol/openid-connect/*` ไปเป็น `/application/o/*` ของ Authentik
+3. **Caddy oidc-proxy**: แปลง HTTP Requests ของ OIDC จาก `/protocol/openid-connect/*` ไปเป็น `/application/o/*` ของ Authentik
 4. **Web App**: React Router v7 SSR สำหรับการทำ Frontend
 
 ---
@@ -109,12 +109,21 @@
 
 ## ข้อมูลเพิ่มเติมสำหรับนักพัฒนา (Developer Notes)
 
-1. **Path Translation (oidc-proxy)**:
-   - Supabase (GoTrue) ฝัง Hardcode มาว่า Keycloak จะต้องใช้ Endpoint แบบ `/protocol/openid-connect/auth`
-   - เราใช้ Caddy (Service `oidc-proxy`) สร้าง Server ภายใน Docker รับ Request และ Proxy ไปยัง `/application/o/authorize/` ของ Authentik
-2. **Server-Side URL Rewrite (Web App)**:
-   - เนื่องจาก `oidc-proxy` เป็น Hostname ที่รู้จักเฉพาะในเครือข่าย Docker เท่านั้น Browser ไม่สามารถเข้าถึงได้โดยตรง
-   - ใน Web App (React Router SSR) ไฟล์ `app/routes/auth.login.tsx` มีโค้ดสำหรับการแก้ปัญหานี้ โดยเมื่อกด SSO Server Node.js จะทำการ `fetch()` แบบ manual ไปยัง Supabase เพื่อเอา URL `http://oidc-proxy/...` มา จากนั้นใช้ Regular Expression ดึงเอาค่า `?search=...` Parameters มาต่อท้ายกับ `http://localhost:9000/application/o/authorize/` แล้วสั่งให้ Browser ทำการ Redirect ไปแทน
+### 1. การทำงานของ Caddy (Reverse Proxy สำหรับ OIDC)
+
+Supabase (GoTrue) ฝัง Hardcode มาว่าเมื่อใช้งาน Provider ชนิด Keycloak จะต้องเรียกใช้ Endpoint ในรูปแบบ `/protocol/openid-connect/*` เสมอ ซึ่งต่างจาก Authentik ที่ใช้ URL เริ่มต้นด้วย `/application/o/*` เราจึงแก้ปัญหานี้โดยการใช้ **Caddy** (Service: `oidc-proxy`) ทำหน้าที่รับ Request และแปลง Path ให้ถูกต้อง:
+
+- **OIDC Discovery (`/.well-known/openid-configuration`)**: Caddy จะจับ Request นี้และทำการ Rewrite ให้ชี้ไปยัง Discovery URL ของแอปพลิเคชัน Authentik ที่ชื่อว่า `poc`
+- **Authorization Endpoint (`/protocol/openid-connect/auth`)**: เมื่อมีการร้องขอให้ล็อกอิน Caddy จะแทรก Scopes `openid profile email` เข้าไปใน Request แล้วสั่งให้เบราว์เซอร์ **Redirect (302)** ไปยังหน้าล็อกอินของ Authentik แทน
+- **Token & UserInfo Endpoints**: Caddy จะรับ Request (POST/GET) แล้ว Rewrite ส่งผ่าน (Proxy Pass) ไปให้ Authentik โดยซ่อนกระบวนการทั้งหมดไว้เบื้องหลัง (GoTrue จะไม่ทราบเลยว่ากำลังคุยกับ Authentik)
+- **Certs (JWKS)**: เมื่อ GoTrue ขอ Public Keys สำหรับยืนยัน Token (`/protocol/openid-connect/certs`) Caddy จะแปลง Path กลับไปที่ `/application/o/poc/jwks/` เพื่อให้สามารถตรวจสอบความถูกต้องของลายเซ็นได้อย่างสมบูรณ์
+
+### 2. Server-Side URL Rewrite (Web App)
+
+- เนื่องจาก `oidc-proxy` เป็น Hostname ที่ใช้เฉพาะในการสื่อสารภายในเครือข่าย Docker เท่านั้น Browser ของฝั่งผู้ใช้ไม่สามารถ Resolve ชื่อโฮสต์นี้ได้
+- ใน Web App (React Router SSR) ไฟล์ `app/routes/auth.login.tsx` จึงมีกระบวนการแก้ไขปัญหานี้:
+  - เมื่อผู้ใช้กดปุ่ม SSO Server Node.js จะทำการร้องขอ URL เริ่มต้นไปยัง Supabase ก่อน
+  - ถ้าระบบตอบกลับมาด้วย URL ที่ขึ้นต้นด้วย `http://oidc-proxy/...` Server จะใช้ Regex ดึงพารามิเตอร์ของ OAuth (เช่น state) มาเชื่อมต่อกับ `http://localhost:9000/application/o/authorize/` (URL จริงที่เข้าถึงได้บน Browser) ก่อนส่งสถานะ Redirect กลับไปยัง Browser เพื่อทำการพาไปหน้าต่างยืนยันตัวตนต่อไป
 
 ---
 
@@ -124,5 +133,5 @@
   - เกิดจากการที่ฟังก์ชัน Server-Side Rewrite ในฝั่ง Web App ทำงานผิดพลาด ตรวจสอบในไฟล์ `auth.login.tsx` ว่ามีการ Fetch แล้ว Replace URL ให้กลายเป็น `http://localhost:9000` แล้วหรือไม่
 - **GoTrue แจ้งเตือน Mailer error ใน Log ของ Docker**:
   - โปรเจกต์นี้ตั้งค่า `GOTRUE_MAILER_AUTOCONFIRM=true` ไว้ การสมัครสมาชิกจึงทำได้เลยโดยไม่ต้องส่งอีเมล แต่หากมีการล็อกอินผิด หรือ Request password reset มันจะพยายามต่อ SMTP และเกิด Error ซึ่งเป็นเรื่องปกติสำหรับการทำ POC ระดับโลคอล
-- **ล็อกอิน Authentik ผ่านแล้ว แต่พอกลับมา Supabase เกิด Error**:
-  - ตรวจสอบว่าในขั้นตอนสร้าง Application บน Authentik คุณได้ตั้งค่า Slug ให้เป็น `poc` หรือไม่ หากเป็นชื่ออื่น Caddy จะไม่สามารถดึง JWKS Certs ไป Validate Token ได้
+- **ล็อกอิน Authentik ผ่านแล้ว แต่พอกลับมา Supabase เกิด Error เกี่ยวกับ JWKS**:
+  - ตรวจสอบว่าในขั้นตอนสร้าง Application บน Authentik คุณได้ตั้งค่า Slug ให้เป็น `poc` หรือไม่ หากเป็นชื่ออื่น Caddy จะไม่สามารถดึง JWKS Certs ไป Validate Token ให้กับ GoTrue ได้
