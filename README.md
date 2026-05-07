@@ -7,34 +7,26 @@ GoTrue v2 ไม่มี `authentik` provider ในตัว — โปรเ�
 ## Architecture
 
 ```mermaid
-sequenceDiagram
-  autonumber
-  participant B as Browser
-  participant W as web<br/>(:3000)
-  participant K as supabase-kong<br/>(:8000)
-  participant G as supabase-auth<br/>(GoTrue)
-  participant C as oidc-proxy<br/>(Caddy)
-  participant A as authentik-server<br/>(:9000)
+flowchart TB
+  B([Browser])
+  W[web :3000]
+  K[Kong + GoTrue :8000]
+  A[Authentik :9000]
 
-  B->>W: คลิก "Sign in with Authentik"
-  W->>G: signInWithOAuth (server-side)
-  W->>G: GET /auth/v1/authorize (follow redirect manually)
-  G-->>W: 302 Location: http://oidc-proxy/...
-  Note over W: rewrite host →<br/>http://localhost:9000/...
-  W-->>B: 302 + Set-Cookie (PKCE verifier)
-  B->>A: /application/o/authorize/?...
-  A->>B: login + consent
-  B->>K: callback?code=...
-  K->>G: /auth/v1/callback
-  G->>C: POST /protocol/openid-connect/token
-  C->>A: rewrite → /application/o/token/
-  A-->>G: id_token
-  G-->>B: 302 → /auth/callback?code=...
-  B->>W: GET /auth/callback (cookie ติดมาด้วย)
-  W->>G: exchangeCodeForSession
-  G-->>W: session
-  W-->>B: 302 → /
+  B  -->|1. กด SSO| W
+  W  -->|2. 302 + Set-Cookie<br/>rewrite host| B
+  B  -->|3. /application/o/authorize| A
+  A  -->|4. login + consent → 302| B
+  B  -->|5. /auth/v1/callback?code| K
+  K  -.6. token exchange<br/>via oidc-proxy.-> A
+  K  -->|7. 302 → /auth/callback?code| B
+  B  -->|8. GET /auth/callback (cookie)| W
+  W  -->|9. exchangeCodeForSession| K
+  K  -->|10. session| W
+  W  -->|11. 302 → /| B
 ```
+
+> Caddy `oidc-proxy` ทำหน้าที่เฉพาะแปลง path ระหว่าง GoTrue กับ Authentik (ขั้นที่ 6) ไม่ปรากฏในเส้นทางที่ browser มองเห็น
 
 Services ทั้งหมดรันด้วย Docker Compose:
 
