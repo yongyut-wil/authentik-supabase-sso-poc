@@ -18,9 +18,9 @@ flowchart TB
   B  -->|3. /application/o/authorize| A
   A  -->|4. login + consent → 302| B
   B  -->|5. /auth/v1/callback?code| K
-  K  -.6. token exchange<br/>via oidc-proxy.-> A
+  K  -.->|6 token exchange<br/>via oidc-proxy| A
   K  -->|7. 302 → /auth/callback?code| B
-  B  -->|8. GET /auth/callback (cookie)| W
+  B  -->|8. GET /auth/callback<br/>cookie attached| W
   W  -->|9. exchangeCodeForSession| K
   K  -->|10. session| W
   W  -->|11. 302 → /| B
