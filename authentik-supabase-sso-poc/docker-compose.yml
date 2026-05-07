@@ -4,7 +4,7 @@ x-authentik-common: &authentik-common
   image: ghcr.io/goauthentik/server:2024.12.3
   restart: unless-stopped
   command: server
-  environment:
+  environment: &authentik-env
     AUTHENTIK_REDIS__HOST: authentik-redis
     AUTHENTIK_POSTGRESQL__HOST: authentik-postgresql
     AUTHENTIK_POSTGRESQL__USER: authentik
@@ -22,7 +22,7 @@ services:
     image: docker.io/library/postgres:16-alpine
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      test: [ "CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}" ]
       start_period: 20s
       interval: 30s
       retries: 5
@@ -38,7 +38,7 @@ services:
     image: docker.io/library/redis:alpine
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      test: [ "CMD-SHELL", "redis-cli ping | grep PONG" ]
       start_period: 20s
       interval: 30s
       retries: 5
@@ -57,15 +57,14 @@ services:
     <<: *authentik-common
     command: worker
     environment:
-      <<: *authentik-common.environment
-      AUTHENTIK_WORKER: "true"
+      <<: *authentik-env
     depends_on:
       - authentik-postgresql
       - authentik-redis
 
   # ── Supabase ──────────────────────────────────────
   supabase-db:
-    image: supabase/postgres:15.1.1.06
+    image: supabase/postgres:15.1.0.147
     restart: unless-stopped
     ports:
       - "5432:5432"
@@ -82,7 +81,9 @@ services:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+      API_EXTERNAL_URL: "http://localhost:8000"
+      GOTRUE_API_EXTERNAL_URL: "http://localhost:8000"
       GOTRUE_SITE_URL: "http://localhost:3000"
       GOTRUE_URI_ALLOW_LIST: "http://localhost:3000/**"
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
@@ -101,7 +102,7 @@ services:
     depends_on:
       - supabase-db
     environment:
-      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
       PGRST_DB_SCHEMA: public
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: ${JWT_SECRET}
