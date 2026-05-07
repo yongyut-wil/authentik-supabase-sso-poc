@@ -33,3 +33,4 @@ volumes/supabase/db/
 # Ignore the actual db data files but keep the directories structure
 volumes/authentik/database/*
 !volumes/authentik/database/.keep
+.claude/
