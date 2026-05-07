@@ -1,4 +1,6 @@
-import { createServerClient, parseCookieHeader, serializeCookieHeader } from '@supabase/ssr'
+import { createServerClient } from '@supabase/ssr'
+import pkg from '@supabase/ssr'
+const { parseCookieHeader, serializeCookieHeader } = pkg
 
 export function createSupabaseServerClient(request: Request) {
   const headers = new Headers()
