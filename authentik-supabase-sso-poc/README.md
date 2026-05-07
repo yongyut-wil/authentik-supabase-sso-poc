@@ -135,3 +135,13 @@ Supabase (GoTrue) ฝัง Hardcode มาว่าเมื่อใช้ง�
   - โปรเจกต์นี้ตั้งค่า `GOTRUE_MAILER_AUTOCONFIRM=true` ไว้ การสมัครสมาชิกจึงทำได้เลยโดยไม่ต้องส่งอีเมล แต่หากมีการล็อกอินผิด หรือ Request password reset มันจะพยายามต่อ SMTP และเกิด Error ซึ่งเป็นเรื่องปกติสำหรับการทำ POC ระดับโลคอล
 - **ล็อกอิน Authentik ผ่านแล้ว แต่พอกลับมา Supabase เกิด Error เกี่ยวกับ JWKS**:
   - ตรวจสอบว่าในขั้นตอนสร้าง Application บน Authentik คุณได้ตั้งค่า Slug ให้เป็น `poc` หรือไม่ หากเป็นชื่ออื่น Caddy จะไม่สามารถดึง JWKS Certs ไป Validate Token ให้กับ GoTrue ได้
+
+### 3. กลไกเบื้องหลังของ Supabase (ทำไมรันแล้วใช้ได้เลย)
+
+คุณอาจจะสงสัยว่าทำไมในคู่มือจึงไม่มีขั้นตอนการ Setup หรือรัน Migration สำหรับ Supabase นั่นเป็นเพราะว่า:
+
+- **ฐานข้อมูลสำเร็จรูป**: เราใช้ Docker Image พิเศษของ Supabase คือ `supabase/postgres` ซึ่งเป็น Image ที่เตรียมโครงสร้าง Schema หลัก (เช่น Schema `auth` สำหรับ GoTrue, และ Role ต่างๆ เช่น `authenticator`, `anon`, `service_role`) เอาไว้เรียบร้อยแล้ว ทำให้ GoTrue และ PostgREST สามารถเชื่อมต่อและใช้งานได้ทันที
+- **การจัดการ Authentication**: สำหรับระบบ Login ด้วย OIDC การตั้งค่าที่จำเป็นที่สุดคือการป้อน Client ID และ Client Secret ผ่าน Environment Variables (`AUTHENTIK_CLIENT_ID` และ `AUTHENTIK_CLIENT_SECRET`) เข้าไปใน Container `supabase-auth` เมื่อ Container ทำงาน มันจะโหลดค่าเหล่านี้และเปิดใช้งาน SSO ทันที
+- **Kong Gateway**: เราผูก `kong.yml` เข้ากับ `anon` และ `service_role` keys แบบ Static (คีย์ถูก Random ไว้ในไฟล์ `.env.example`) เพื่อให้ API Gateway ยอมรับ Request ได้เลยโดยไม่ต้องไปตั้งค่าฐานข้อมูลเพิ่มเติม
+
+ดังนั้น หากคุณต้องการนำไปใช้งานจริง (Production) สิ่งที่คุณต้องเปลี่ยนคือการสร้าง JWT Keys (JWT Secret, Anon Key, Service Role Key) ใหม่ทั้งหมด เพื่อความปลอดภัย แต่สำหรับ POC นี้ ทุกอย่างพร้อมรันได้เลยผ่าน Docker Compose
