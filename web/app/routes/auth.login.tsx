@@ -18,38 +18,6 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  if (intent === "sso") {
-    const origin = new URL(request.url).origin;
-
-    const { data: oauthData, error } = await supabase.auth.signInWithOAuth({
-      provider: "keycloak",
-      options: {
-        redirectTo: `${origin}/auth/callback`,
-        scopes: "openid profile email",
-      },
-    });
-
-    if (error || !oauthData?.url) {
-      return { error: error?.message || "Failed to initiate SSO" };
-    }
-
-    let authUrl = oauthData.url;
-    try {
-      const resp = await fetch(oauthData.url, { redirect: "manual" });
-      const location = resp.headers.get("location");
-
-      if (location && location.includes("oidc-proxy")) {
-        const { search } = new URL(location);
-        const authentikUrl = process.env.AUTHENTIK_AUTHORIZE_URL || "http://localhost:9000/application/o/authorize/";
-        authUrl = `${authentikUrl}${search}`;
-      }
-    } catch (e) {
-      console.error("Error fetching oauth url redirect", e);
-    }
-
-    throw redirect(authUrl, { headers });
-  }
-
   if (intent === "login") {
     const email = formData.get("email") as string;
     const password = formData.get("password") as string;
@@ -70,6 +38,39 @@ export async function action({ request }: Route.ActionArgs) {
       return { error: error.message };
     }
     throw redirect("/", { headers });
+  }
+
+  if (intent === "sso") {
+    const origin = new URL(request.url).origin;
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "keycloak",
+      options: {
+        redirectTo: `${origin}/auth/callback`,
+        scopes: "openid profile email",
+        skipBrowserRedirect: true,
+      },
+    });
+
+    if (error || !data?.url) {
+      return { error: error?.message || "Failed to initiate SSO" };
+    }
+
+    const upstream = await fetch(data.url, { redirect: "manual" });
+    const location = upstream.headers.get("location");
+
+    if (!location) {
+      return { error: "GoTrue did not return a redirect location" };
+    }
+
+    const proxyPrefix = "http://oidc-proxy/protocol/openid-connect/auth";
+    const authorizeUrl =
+      process.env.AUTHENTIK_AUTHORIZE_URL ||
+      "http://localhost:9000/application/o/authorize/";
+    const target = location.startsWith(proxyPrefix)
+      ? location.replace(proxyPrefix, authorizeUrl)
+      : location;
+
+    throw redirect(target, { headers });
   }
 
   return { error: "Invalid action" };

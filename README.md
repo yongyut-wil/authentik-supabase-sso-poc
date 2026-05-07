@@ -120,17 +120,55 @@ Supabase (GoTrue) ฝัง Hardcode มาว่าเมื่อใช้ง�
 
 ### 2. Server-Side URL Rewrite (Web App)
 
-- เนื่องจาก `oidc-proxy` เป็น Hostname ที่ใช้เฉพาะในการสื่อสารภายในเครือข่าย Docker เท่านั้น Browser ของฝั่งผู้ใช้ไม่สามารถ Resolve ชื่อโฮสต์นี้ได้
-- ใน Web App (React Router SSR) ไฟล์ `app/routes/auth.login.tsx` จึงมีกระบวนการแก้ไขปัญหานี้:
-  - เมื่อผู้ใช้กดปุ่ม SSO Server Node.js จะทำการร้องขอ URL เริ่มต้นไปยัง Supabase ก่อน
-  - ถ้าระบบตอบกลับมาด้วย URL ที่ขึ้นต้นด้วย `http://oidc-proxy/...` Server จะใช้ Regex ดึงพารามิเตอร์ของ OAuth (เช่น state) มาเชื่อมต่อกับ `http://localhost:9000/application/o/authorize/` (URL จริงที่เข้าถึงได้บน Browser) ก่อนส่งสถานะ Redirect กลับไปยัง Browser เพื่อทำการพาไปหน้าต่างยืนยันตัวตนต่อไป
+- เนื่องจาก `oidc-proxy` และ `supabase-kong` เป็น Hostname ที่ใช้เฉพาะในการสื่อสารภายในเครือข่าย Docker เท่านั้น Browser ของฝั่งผู้ใช้ไม่สามารถ Resolve ชื่อโฮสต์เหล่านี้ได้
+- ปุ่ม **Sign in with Authentik** จึง POST ไปยัง server action ของ `app/routes/auth.login.tsx` (intent=`sso`) แทนการเรียก `signInWithOAuth` ฝั่ง browser ตรงๆ ขั้นตอนภายในเป็นดังนี้:
+  1. เรียก `supabase.auth.signInWithOAuth({ provider: "keycloak", skipBrowserRedirect: true })` ฝั่ง server เพื่อให้ supabase-js สร้าง PKCE `code_verifier` และเก็บลง cookie ผ่าน adapter ของ `@supabase/ssr`
+  2. Server `fetch(data.url, { redirect: "manual" })` ไปยัง GoTrue authorize endpoint แล้วอ่าน `Location` header (ซึ่งจะชี้ไปที่ `http://oidc-proxy/protocol/openid-connect/auth?...` พร้อม `state`)
+  3. แทนที่ host `http://oidc-proxy/protocol/openid-connect/auth` ด้วย `process.env.AUTHENTIK_AUTHORIZE_URL` (default `http://localhost:9000/application/o/authorize/`) โดยคง query string เดิมไว้
+  4. `throw redirect(target, { headers })` — Browser จะได้ 302 พร้อม `Set-Cookie` ของ PKCE verifier ใน response เดียวกัน
+- เมื่อผู้ใช้ login ที่ Authentik สำเร็จ Authentik จะ redirect กลับไป `http://localhost:8000/auth/v1/callback` (Kong → GoTrue) → GoTrue แลก code กับ Authentik ผ่าน `oidc-proxy` token endpoint → redirect กลับ `http://localhost:3000/auth/callback?code=...` → `auth.callback.tsx` เรียก `exchangeCodeForSession` ซึ่งอ่าน `code_verifier` จาก cookie
 
 ---
 
+### 3. การพัฒนา Web App (Local Development)
+
+คอนเทนเนอร์ `web` ใน `docker-compose.yml` รัน production build (`react-router-serve`) บน port 3000 — เหมาะกับการ demo end-to-end ไม่เหมาะกับการแก้ UI เพราะต้อง rebuild ทุกครั้ง
+
+สำหรับการพัฒนาให้รัน Vite dev server บนเครื่อง host:
+
+1. หยุดคอนเทนเนอร์ `web` เพื่อปลด port:
+   ```bash
+   docker compose stop web
+   ```
+2. สร้างไฟล์ `web/.env` (ไม่ถูก commit) ใส่ค่าทั้ง 4 ตัว — root `.env` ใช้เฉพาะกับ Docker เท่านั้น Vite ไม่อ่าน
+   ```env
+   SUPABASE_URL=http://localhost:8000
+   SUPABASE_ANON_KEY=<ค่าจาก root .env>
+   AUTHENTIK_AUTHORIZE_URL=http://localhost:9000/application/o/authorize/
+   VITE_SUPABASE_URL=http://localhost:8000
+   VITE_SUPABASE_ANON_KEY=<ค่าจาก root .env>
+   ```
+   > URL ใช้ `localhost:8000` ซึ่งเป็น published port ของ Kong ไม่ใช่ `supabase-kong:8000` (DNS นั้น resolve ได้เฉพาะใน Docker network) ส่วนตัวแปรที่ขึ้นต้นด้วย `VITE_` จำเป็นสำหรับ browser bundle เพราะ Vite จะเปิดเผยเฉพาะตัวที่ขึ้นต้นด้วย `VITE_` ไปยังฝั่ง client
+3. รัน dev server บน port 3000 (ตรงกับ `GOTRUE_URI_ALLOW_LIST`):
+   ```bash
+   cd web
+   npm run dev -- --port 3000
+   ```
+
 ## การแก้ไขปัญหาเบื้องต้น (Troubleshooting)
 
-- **Browser ขึ้น Error 'DNS Not Found oidc-proxy'**:
-  - เกิดจากการที่ฟังก์ชัน Server-Side Rewrite ในฝั่ง Web App ทำงานผิดพลาด ตรวจสอบในไฟล์ `auth.login.tsx` ว่ามีการ Fetch แล้ว Replace URL ให้กลายเป็น `http://localhost:9000` แล้วหรือไม่
+- **Browser ขึ้น Error `ERR_NAME_NOT_RESOLVED oidc-proxy` หรือ `supabase-kong`**:
+  - แสดงว่า Server-Side Rewrite ใน `app/routes/auth.login.tsx` (intent=`sso`) ไม่ได้ทำงาน หรือโค้ดที่รันอยู่ในคอนเทนเนอร์ `web` เป็น build เก่า ลอง rebuild (`docker compose build web && docker compose up -d web`) หรือสลับมาใช้ dev server (`cd web && npm run dev -- --port 3000`) — สังเกต: Vite เปิด port 5173 เป็น default แต่ `GOTRUE_URI_ALLOW_LIST` อนุญาตเฉพาะ `localhost:3000` ต้องเปลี่ยน port ให้ตรงกัน
+- **`pkce_code_verifier_not_found` ตอน `/auth/callback`** (ผ่าน Authentik แล้วแต่ login ไม่จบ):
+  - เกิดจาก cookie `sb-…-code-verifier` ไม่ถูก persist ตรวจสอบเรียงตามนี้
+    1. `web/app/utils/supabase.server.ts` ใช้ adapter shape ตรงกับเวอร์ชัน `@supabase/ssr` ที่ติดตั้งจริง (v0.3 ใช้ `get`/`set`/`remove` ทีละ cookie ไม่ใช่ `getAll`/`setAll`)
+    2. SSO action ส่ง `headers` เข้า `redirect(target, { headers })` ครบ — ขาดตัวนี้ Set-Cookie จะหาย
+    3. ผู้ใช้ไม่ได้ลบ cookies ของ `localhost` กลางคัน
+- **`Unable to exchange external code` ใน supabase-auth log** (HTTP 500 ฝั่ง GoTrue):
+  - GoTrue แลก code จาก Authentik ไม่ผ่าน มักเกิดจาก
+    - `AUTHENTIK_CLIENT_SECRET` ใน `.env` ไม่ตรงกับใน Authentik และยังไม่ได้ `docker compose up -d --force-recreate supabase-auth`
+    - Redirect URI ในผู้ให้บริการของ Authentik ต้องเป็น `http://localhost:8000/auth/v1/callback` ตรงๆ
+    - Code เดิมถูกใช้ซ้ำ (เช่นกดปุ่ม SSO รัวๆ)
 - **GoTrue แจ้งเตือน Mailer error ใน Log ของ Docker**:
   - โปรเจกต์นี้ตั้งค่า `GOTRUE_MAILER_AUTOCONFIRM=true` ไว้ การสมัครสมาชิกจึงทำได้เลยโดยไม่ต้องส่งอีเมล แต่หากมีการล็อกอินผิด หรือ Request password reset มันจะพยายามต่อ SMTP และเกิด Error ซึ่งเป็นเรื่องปกติสำหรับการทำ POC ระดับโลคอล
 - **ล็อกอิน Authentik ผ่านแล้ว แต่พอกลับมา Supabase เกิด Error เกี่ยวกับ JWKS**:
