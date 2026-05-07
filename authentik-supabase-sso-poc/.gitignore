@@ -1,1 +1,35 @@
+# Environment Variables
 .env
+.env.local
+.env.*.local
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+.pnpm-debug.log
+
+# React Router / Vite build output
+web/build/
+web/.react-router/
+web/dist/
+
+# OS/Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker / Database Data (Critical to ignore to avoid committing DB files)
+volumes/authentik/database/
+volumes/authentik/redis/
+volumes/authentik/media/
+volumes/supabase/db/
+# Keep custom-templates if any, but ignore standard media
+!volumes/authentik/custom-templates/
+
+# Ignore the actual db data files but keep the directories structure
+volumes/authentik/database/*
+!volumes/authentik/database/.keep
