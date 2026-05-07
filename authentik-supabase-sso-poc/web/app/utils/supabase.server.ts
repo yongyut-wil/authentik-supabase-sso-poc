@@ -1,4 +1,9 @@
-import { createServerClient, parseCookieHeader, serializeCookieHeader } from '@supabase/ssr'
+import * as supabaseSsr from '@supabase/ssr'
+
+// Handle CommonJS / ESM default export interop for Vite SSR
+const createServerClient = supabaseSsr.createServerClient || (supabaseSsr as any).default?.createServerClient;
+const parseCookieHeader = supabaseSsr.parseCookieHeader || (supabaseSsr as any).default?.parseCookieHeader;
+const serializeCookieHeader = supabaseSsr.serializeCookieHeader || (supabaseSsr as any).default?.serializeCookieHeader;
 
 export function createSupabaseServerClient(request: Request) {
   const headers = new Headers()
@@ -10,9 +15,9 @@ export function createSupabaseServerClient(request: Request) {
     cookies: {
       getAll() {
         const cookies = parseCookieHeader(request.headers.get('Cookie') ?? '')
-        return cookies.map(c => ({ name: c.name, value: c.value ?? '' }))
+        return cookies.map((c: any) => ({ name: c.name, value: c.value ?? '' }))
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet: any[]) {
         cookiesToSet.forEach(({ name, value, options }) =>
           headers.append('Set-Cookie', serializeCookieHeader(name, value, options))
         )
