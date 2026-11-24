@@ -1,174 +1,154 @@
 # Authentik + Supabase SSO POC
 
-POC ใช้ **Authentik** เป็น Identity Provider ให้กับ **Supabase Auth (GoTrue)** ผ่าน OIDC แบบ self-hosted ทั้งหมด ไม่พึ่งระบบ cloud ภายนอก
+ทดสอบการเข้าสู่ระบบแบบ Single Sign-On (SSO) บนเว็บ React Router ด้วย Authentik เป็น Identity Provider (IdP) และ Supabase Auth ออก session ให้แอป ทั้งสแต็กรันผ่าน Docker Compose และมีฟอร์มอีเมลกับรหัสผ่านสำหรับทดสอบ Supabase Auth โดยตรง
 
-GoTrue v2 ไม่มี `authentik` provider ในตัว — โปรเจกต์นี้แก้โดยใช้ provider ชนิด `keycloak` ของ GoTrue และวาง **Caddy** (`oidc-proxy`) ไว้ตรงกลางเพื่อแปลง path จากรูปแบบ Keycloak ไปเป็นของ Authentik
+PoC นี้ใช้ Authentik `2024.12.3` และ Supabase Auth (GoTrue) `v2.158.1` โดยให้ Caddy แปลง endpoint ของ provider `keycloak` ให้เป็น OpenID Connect (OIDC) endpoint ของ Authentik [ซอร์ส Keycloak provider](https://github.com/supabase/auth/blob/v2.158.1/internal/api/provider/keycloak.go#L24-L89)
 
-## Architecture
+> ใช้กับ local lab ค่าใน `.env.example` เป็นค่าทดสอบที่เผยแพร่ใน repo และ Compose เปิดพอร์ตบนทุก interface ของเครื่องตามค่าเริ่มต้น ให้จำกัดการเข้าถึงจากเครือข่ายและเก็บ Client Secret ใน `.env` ที่ Git ignore ไว้ [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
 
-```mermaid
-flowchart TB
-  B([Browser])
-  W[web :3000]
-  K[Kong + GoTrue :8000]
-  A[Authentik :9000]
+> `@supabase/ssr@0.3.0` ใน lockfile ใช้ cookie adapter แบบ `get`, `set` และ `remove`; adapter ในเว็บใช้ interface นี้เพื่อเก็บ PKCE verifier และ session cookie
 
-  B  -->|1. กด SSO| W
-  W  -->|2. 302 + Set-Cookie<br/>rewrite host| B
-  B  -->|3. /application/o/authorize| A
-  A  -->|4. login + consent → 302| B
-  B  -->|5. /auth/v1/callback?code| K
-  K  -.->|6 token exchange<br/>via oidc-proxy| A
-  K  -->|7. 302 → /auth/callback?code| B
-  B  -->|8. GET /auth/callback<br/>cookie attached| W
-  W  -->|9. exchangeCodeForSession| K
-  K  -->|10. session| W
-  W  -->|11. 302 → /| B
-```
+## เริ่มใช้งาน
 
-> Caddy `oidc-proxy` ทำหน้าที่เฉพาะแปลง path ระหว่าง GoTrue กับ Authentik (ขั้นที่ 6) ไม่ปรากฏในเส้นทางที่ browser มองเห็น
+ใช้ Docker พร้อมคำสั่ง `docker compose`, Git สำหรับ clone และ `curl` สำหรับเช็ก HTTP ให้พอร์ต `3000`, `5432`, `8000`, `9000` และ `9443` ว่าง Docker สร้างและรันเว็บด้วย Node.js 22 [Dockerfile](web/Dockerfile)
 
-Services ทั้งหมดรันด้วย Docker Compose:
-
-| Service | Port (host) | หน้าที่ |
-| --- | --- | --- |
-| `authentik-server` / `worker` / `postgresql` / `redis` | `9000` | IdP |
-| `supabase-db` | `5432` | Postgres ที่มี schema `auth` พร้อมใช้ |
-| `supabase-auth` (GoTrue) | — | Auth API |
-| `supabase-rest` (PostgREST) | — | REST API |
-| `supabase-kong` | `8000` | API Gateway |
-| `oidc-proxy` (Caddy) | — | แปลง path Keycloak ↔ Authentik |
-| `web` | `3000` | React Router v7 SSR |
-
-## Prerequisites
-
-- Docker + Docker Compose (Docker Desktop, OrbStack, หรือ Docker Engine)
-- Git
-
-> Node.js ต้องมีเฉพาะตอนพัฒนา UI ฝั่ง host (ดู [Local Development](#local-development)) — รัน POC end-to-end ใช้แค่ Docker
-
-## Quick Start
-
-### 1. เริ่มต้น services
+### 1. เปิด services
 
 ```bash
 git clone <repository_url>
 cd authentik-supabase-sso-poc
-cp .env.example .env
-docker compose up -d
+test -f .env || cp .env.example .env
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+curl -fsS --retry 6 --retry-delay 2 --retry-connrefused http://localhost:8000/auth/v1/health
 ```
 
-ครั้งแรกใช้เวลา 1–3 นาทีให้ image โหลด + healthcheck ผ่าน ตรวจสถานะด้วย `docker compose ps` รอจนทุกตัวขึ้น `healthy` หรือ `Up`
+เมื่อ Supabase Auth พร้อม `/auth/v1/health` จะตอบ HTTP 200 ผ่าน Kong ส่วน Authentik ใช้เวลารัน migration และโหลด flow ครั้งแรก ให้เปิดหน้า initial setup ในขั้นถัดไปเมื่อพร้อม `depends_on` ใน Compose ชุดนี้กำหนดลำดับเริ่ม container [Docker Compose startup order](https://docs.docker.com/compose/how-tos/startup-order/)
 
 ### 2. ตั้งค่า Authentik admin
 
-1. เปิด `http://localhost:9000/if/flow/initial-setup/`
-2. ตั้งรหัสผ่านให้ user `akadmin` (อีเมลใส่อะไรก็ได้)
-3. หลัง redirect กลับ Home คลิก **Admin Interface** มุมขวาบน
+เปิด `http://localhost:9000/if/flow/initial-setup/` เมื่อเริ่มครั้งแรก ตั้งอีเมลและรหัสผ่านให้บัญชี `akadmin` แล้วเข้า **Admin interface** [Authentik Docker Compose installation](https://docs.goauthentik.io/install-config/install/docker-compose/)
 
-### 3. สร้าง OIDC Provider + Application
+### 3. สร้าง Provider และ Application
 
-ที่ Admin Interface → **Applications > Providers** → **Create** → **OAuth2/OpenID Provider**
+ใน **Applications → Providers → Create** เลือก **OAuth2/OpenID Provider** Provider เก็บค่าที่ Supabase Auth ใช้ยืนยันตัวตนกับ Authentik
 
-- **Name**: `poc-provider`
-- **Authorization flow**: `default-provider-authorization-explicit-consent`
-- **Client Type**: `Confidential`
-- **Client ID / Secret**: คัดลอกเก็บไว้
-- **Redirect URIs/Origins (RegEx)**: `http://localhost:8000/auth/v1/callback` *(ต้องตรงเป๊ะ)*
-- **Advanced protocol settings → Scopes**: เพิ่ม `email`, `openid`, `profile`
+| ช่องใน Authentik | ค่า |
+| --- | --- |
+| **Name** | `poc-provider` |
+| **Authorization flow** | `default-provider-authorization-explicit-consent` |
+| **Client type** | **Confidential** |
+| **Redirect URIs/Origins (RegEx)** | เพิ่ม `http://localhost:8000/auth/v1/callback` โดยเลือก **Strict** |
+| **Invalidation flow** | `default-provider-invalidation-flow` ซึ่งฟอร์มเลือกไว้ให้ |
+| **Advanced protocol settings → Scopes** | เลือก mappings สำหรับ `openid`, `profile` และ `email` |
 
-จากนั้น **Applications > Applications** → **Create**
+บันทึก Provider และเก็บ **Client ID** กับ **Client Secret** จากนั้นไปที่ **Applications → Applications → Create** ตั้ง **Name** เป็น `POC App`, **Slug** เป็น `poc` เพื่อให้ตรงกับ discovery และ JWKS ใน Caddy แล้วเลือก **Provider** เป็น `poc-provider` [ฟอร์มใน Authentik 2024.12.3](https://github.com/goauthentik/authentik/blob/version/2024.12.3/web/src/admin/providers/oauth2/OAuth2ProviderFormForm.ts#L120-L285)
 
-- **Name**: `POC App`
-- **Slug**: `poc` *(❗ ต้องเป็นชื่อนี้เท่านั้น — Caddy hardcode `/application/o/poc/jwks/` ไว้)*
-- **Provider**: `poc-provider`
+### 4. ส่ง credentials ให้ Supabase Auth
 
-### 4. ใส่ credentials กลับเข้า GoTrue
-
-แก้ `.env` ใส่ค่าที่ copy ไว้ในขั้นที่ 3:
-
-```env
-AUTHENTIK_CLIENT_ID=...
-AUTHENTIK_CLIENT_SECRET=...
-```
-
-แล้ว recreate container เพื่อโหลด env ใหม่:
+ใส่ **Client ID** ใน `AUTHENTIK_CLIENT_ID` และ **Client Secret** ใน `AUTHENTIK_CLIENT_SECRET` ที่ไฟล์ `.env` ของ repo จากนั้นสร้าง container ของ Supabase Auth ใหม่เพื่อให้ Compose ส่งค่าชุดล่าสุดเข้าไป [Docker Compose up](https://docs.docker.com/reference/cli/docker/compose/up/)
 
 ```bash
-docker compose up -d --force-recreate supabase-auth
+docker compose up -d --no-deps --force-recreate supabase-auth
+curl -fsS --retry 6 --retry-delay 2 --retry-connrefused http://localhost:8000/auth/v1/health
 ```
 
-### 5. ทดสอบ
+### 5. ทดสอบล็อกอิน
 
-1. เปิด `http://localhost:3000` → ระบบจะ redirect ไป `/auth/login`
-2. ทดสอบได้ 2 ทาง:
-   - **Email/Password**: กรอกอีเมล + รหัสผ่าน กด **Create Account** (ตั้ง `GOTRUE_MAILER_AUTOCONFIRM=true` ไว้ login ทันทีโดยไม่ต้องยืนยันอีเมล)
-   - **SSO**: คลิก **Sign in with Authentik** → login `akadmin` ที่ Authentik → กด **Continue** ยอมรับ consent → กลับมาที่ Dashboard
-3. กด **Sign Out** เพื่อลบ session
+1. เปิด `http://localhost:3000` เว็บจะพาไป `/auth/login` เมื่อยังไม่มี session
+2. ทดสอบอีเมลด้วย **Create Account** แล้วใช้ **Sign In** ในรอบถัดไป Supabase Auth ยืนยันอีเมลในระบบทันทีด้วย `GOTRUE_MAILER_AUTOCONFIRM=true` ใช้อีเมลคนละตัวกับบัญชี Authentik เพื่อแยกผลทดสอบ
+3. ทดสอบ SSO ด้วย **Sign in with Authentik** ล็อกอินด้วยบัญชี Authentik ที่มีอีเมล แล้วกด **Continue** เมื่อหน้า consent ปรากฏ
+4. เมื่อเว็บบันทึก session สำเร็จ หน้า Dashboard ที่ `/` จะแสดง **Authentication Provider** เป็น `email` หรือ `keycloak` ตามวิธีที่ใช้ กด **Sign Out** เพื่อออกจาก Supabase session หากต้องการกรอกรหัสผ่าน Authentik ใหม่ให้ใช้หน้าต่าง private เพราะ Authentik มี session ของตัวเอง
 
-## How It Works
+ใช้ `docker compose stop` เพื่อพัก lab และ `docker compose start` เพื่อเปิด container เดิม ข้อมูล Supabase อยู่ใน container `supabase-db` เพราะ Compose ชุดนี้ไม่ได้ mount volume ให้ฐานข้อมูลนี้ ข้อมูลจะหายเมื่อ container ถูกลบ [Docker Compose stop](https://docs.docker.com/reference/cli/docker/compose/stop/)
 
-### Caddy oidc-proxy แปลง path Keycloak ↔ Authentik
+## สถาปัตยกรรม
 
-GoTrue hardcode ว่า provider ชนิด Keycloak ต้องคุยผ่าน `/protocol/openid-connect/*` ส่วน Authentik ใช้ `/application/o/*` เลยใส่ Caddy ขั้นกลางใน `volumes/oidc-proxy/Caddyfile`:
-
-| Endpoint ที่ GoTrue ขอ | Caddy ทำอะไร |
+| Service | หน้าที่ |
 | --- | --- |
-| `/.well-known/openid-configuration` | rewrite → `/application/o/poc/.well-known/...` |
-| `/protocol/openid-connect/auth` | redirect 302 → `/application/o/authorize/` (เติม scope ให้ครบ) |
-| `/protocol/openid-connect/token` | rewrite → `/application/o/token/` |
-| `/protocol/openid-connect/userinfo` | rewrite → `/application/o/userinfo/` |
-| `/protocol/openid-connect/certs` | rewrite → `/application/o/poc/jwks/` |
+| `web` | React Router SSR หน้าเว็บอยู่ที่ `http://localhost:3000` |
+| `supabase-kong` | Gateway พอร์ต `8000` ส่ง `/auth/v1/*` ไป GoTrue และ `/rest/v1/*` ไป PostgREST |
+| `supabase-auth`, `supabase-db`, `supabase-rest` | สร้าง session, เก็บข้อมูลใน PostgreSQL และให้บริการ REST API ตามลำดับ GoTrue รัน migration ตอนเริ่ม service |
+| `authentik-server`, `authentik-worker` | Identity Provider ใช้ PostgreSQL กับ Redis แยกจาก Supabase หน้า Authentik อยู่ที่ `http://localhost:9000` |
+| `oidc-proxy` | Caddy แปลง endpoint ของ Keycloak ให้เป็นของ Authentik ภายในเครือข่าย Docker |
 
-### Server-side rewrite ฝั่ง web app
+Kong ใช้ route และ credentials ตัวอย่างจากไฟล์ config รายการ `service_role` เป็นค่าตัวอย่าง และ routes ชุดนี้ยังไม่มีการผูก plugin `key-auth` [kong.yml](volumes/supabase/kong.yml)
 
-`oidc-proxy` และ `supabase-kong` เป็น hostname ภายในเครือข่าย Docker — browser ของ user resolve ไม่ออก ปุ่ม **Sign in with Authentik** จึง POST ไปยัง server action ของ `app/routes/auth.login.tsx` (intent=`sso`) แทนการเรียก `signInWithOAuth` ฝั่ง browser ตรงๆ ขั้นตอนภายใน:
+### เส้นทาง SSO
 
-1. เรียก `supabase.auth.signInWithOAuth({ provider: "keycloak", skipBrowserRedirect: true })` ฝั่ง server เพื่อให้ supabase-js สร้าง PKCE `code_verifier` และเก็บลง cookie ผ่าน adapter ของ `@supabase/ssr`
-2. Server `fetch(data.url, { redirect: "manual" })` ไปยัง GoTrue authorize endpoint แล้วอ่าน `Location` header ที่ชี้ไปยัง `http://oidc-proxy/protocol/openid-connect/auth?...`
-3. แทนที่ host ด้วย `process.env.AUTHENTIK_AUTHORIZE_URL` (default `http://localhost:9000/application/o/authorize/`) คง query string เดิมไว้
-4. `throw redirect(target, { headers })` — Browser ได้ 302 พร้อม `Set-Cookie` PKCE verifier ใน response เดียวกัน
+```mermaid
+sequenceDiagram
+    autonumber
+    actor B as Browser
+    participant W as Web app :3000
+    participant K as Kong :8000
+    participant G as GoTrue :9999
+    participant C as Caddy oidc-proxy
+    participant A as Authentik :9000
 
-ขากลับ: Authentik → Kong (`/auth/v1/callback`) → GoTrue แลก token กับ Authentik ผ่าน `oidc-proxy` → redirect ไป `/auth/callback?code=...` → `auth.callback.tsx` เรียก `exchangeCodeForSession` อ่าน cookie → ได้ session
+    B->>W: POST /auth/login with intent=sso
+    W->>K: GET /auth/v1/authorize?provider=keycloak
+    K->>G: Forward /authorize to supabase-auth:9999
+    G-->>K: 302 Location with oidc-proxy hostname
+    K-->>W: Return the Location response
+    Note over W: Read Location manually, replace the host with AUTHENTIK_AUTHORIZE_URL
+    W-->>B: 302 to Authentik authorize URL + Set-Cookie PKCE verifier
+    B->>A: GET /application/o/authorize/
+    A-->>B: Login and consent, then redirect to Supabase callback
+    B->>K: GET /auth/v1/callback?code=...
+    K->>G: Forward /callback to supabase-auth:9999
+    G->>C: POST /protocol/openid-connect/token
+    C->>A: Rewrite to /application/o/token/
+    G->>C: GET /protocol/openid-connect/userinfo
+    C->>A: Rewrite to /application/o/userinfo/
+    G-->>K: 302 to /auth/callback?code=Supabase-PKCE
+    K-->>B: Forward the redirect
+    B->>W: GET /auth/callback?code=... + PKCE verifier cookie
+    W->>K: POST /auth/v1/token?grant_type=pkce with code and verifier
+    K->>G: Forward PKCE code exchange
+    G-->>K: Return Supabase session
+    K-->>W: Forward session response
+    W-->>B: 302 to / with Set-Cookie session
+    B->>W: GET / with session cookie
+    W->>K: GET /auth/v1/user
+    K->>G: Forward authenticated user lookup
+    G-->>K: Return user
+    K-->>W: Forward user response
+    W-->>B: Render authenticated dashboard
+```
 
-### ทำไม Supabase รันแล้วใช้ได้เลย
+Authentik ส่ง browser กลับที่ callback ของ Supabase `http://localhost:8000/auth/v1/callback` ส่วน GoTrue ส่งกลับ callback ของเว็บ `http://localhost:3000/auth/callback` เว็บอ่าน PKCE verifier จาก cookie แล้วส่ง code ไปแลก Supabase session ก่อน redirect ไปหน้า dashboard [auth.login.tsx](web/app/routes/auth.login.tsx) · [auth.callback.tsx](web/app/routes/auth.callback.tsx) · [cookie adapter](web/app/utils/supabase.server.ts) · [Caddyfile](volumes/oidc-proxy/Caddyfile)
 
-- **`supabase/postgres` image** มี schema `auth` (สำหรับ GoTrue) และ role `authenticator` / `anon` / `service_role` เตรียมไว้แล้ว — ไม่ต้องรัน migration เอง
-- **Kong** ผูก `anon` / `service_role` keys แบบ static ใน `volumes/supabase/kong.yml` (คีย์ถูก random ไว้ใน `.env.example`) ไม่ต้องตั้ง DB เพิ่ม
-- **OIDC SSO** ใช้แค่ env vars (`AUTHENTIK_CLIENT_ID`, `AUTHENTIK_CLIENT_SECRET`) เข้า container `supabase-auth` ก็เปิดใช้ได้
+Caddy มี route เพิ่มสำหรับ discovery ซึ่งบอก URL ของ OIDC provider และ JWKS ซึ่งเผยแพร่ public keys ของแอป `poc` เส้นทาง SSO ของ PoC ใช้ URL สำหรับ authorize, token และ userinfo ที่ Keycloak provider ของ GoTrue รุ่นนี้สร้างขึ้น [Caddyfile](volumes/oidc-proxy/Caddyfile) · [ซอร์ส GoTrue v2.158.1](https://github.com/supabase/auth/blob/v2.158.1/internal/api/provider/keycloak.go#L24-L89)
 
-> ถ้าจะเอาไปใช้ production ต้องสร้าง JWT secret + anon/service-role keys ชุดใหม่เพื่อความปลอดภัย — สำหรับ POC ทุกอย่างพร้อมใช้
+Supabase รุ่นที่รองรับ Custom OAuth/OIDC ตั้งค่าจาก issuer ของ Authentik ได้โดยตรง วิธีนั้นต้องใช้ Supabase เวอร์ชันที่คู่มือ self-hosting รองรับและเปลี่ยน provider ที่แอปเรียกเป็น `custom:<name>` [Supabase Custom OAuth/OIDC สำหรับ self-hosting](https://supabase.com/docs/guides/self-hosting/self-hosted-custom-oauth-providers)
 
 ## Local Development
 
-Container `web` ใน `docker-compose.yml` รัน production build (`react-router-serve`) บน port 3000 — เหมาะ demo ไม่เหมาะแก้ UI เพราะต้อง rebuild ทุกครั้ง
+ใช้ Node.js 22 ให้ตรงกับ Dockerfile และเปิด backend ด้วย Compose ตามขั้นตอนด้านบน เว็บที่รันบน host จะอ่าน `SUPABASE_URL` และ `SUPABASE_ANON_KEY` จาก `.env` ที่ root ผ่านการตั้งค่า `envDir` ใน Vite URL สำหรับ dev คือ `http://localhost:8000` ส่วน `web` ใน Compose คุยกับ Kong ผ่าน `http://supabase-kong:8000` [vite.config.ts](web/vite.config.ts) · [docker-compose.yml](docker-compose.yml)
 
-สำหรับการพัฒนาให้รัน Vite dev server บน host:
+จาก root ของ repo รัน
 
-1. หยุด container `web` เพื่อปลด port:
-   ```bash
-   docker compose stop web
-   ```
-2. สร้างไฟล์ `web/.env` (gitignored — root `.env` ใช้กับ Docker เท่านั้น Vite ไม่อ่าน):
-   ```env
-   SUPABASE_URL=http://localhost:8000
-   SUPABASE_ANON_KEY=<ค่าจาก root .env>
-   AUTHENTIK_AUTHORIZE_URL=http://localhost:9000/application/o/authorize/
-   VITE_SUPABASE_URL=http://localhost:8000
-   VITE_SUPABASE_ANON_KEY=<ค่าจาก root .env>
-   ```
-   > URL ต้องเป็น `localhost:8000` (Kong's published port) ไม่ใช่ `supabase-kong:8000` (resolve ได้เฉพาะใน Docker network) ส่วน `VITE_` prefix จำเป็นเพราะ Vite expose ตัวที่ขึ้นต้นด้วย `VITE_` ไปฝั่ง browser เท่านั้น
-3. รัน dev server บน port 3000 ให้ตรงกับ `GOTRUE_URI_ALLOW_LIST`:
-   ```bash
-   cd web
-   npm run dev -- --port 3000
-   ```
+```bash
+cd web
+npm ci
+npm run dev -- --port 5173 --strictPort
+```
 
-> รายละเอียด failure modes สำหรับนักพัฒนา (PKCE, cookie adapter mismatch, `Unable to exchange external code`) ดูที่ [`AGENT.md`](./AGENT.md) และ [`CLAUDE.md`](./CLAUDE.md)
+เปิด `http://localhost:5173` GoTrue มี `http://localhost:5173/**` ใน `GOTRUE_URI_ALLOW_LIST` สำหรับ callback ของเว็บ ส่วน redirect URI ที่ลงทะเบียนใน Authentik ยังคงเป็น `http://localhost:8000/auth/v1/callback` [Supabase redirect URLs](https://supabase.com/docs/guides/auth/redirect-urls)
+
+ดูคำสั่ง build และ typecheck ได้ใน [web/README.md](web/README.md)
 
 ## Troubleshooting
 
-- **Authentik login ผ่าน แต่กลับมา Supabase แล้ว error เกี่ยว JWKS** — เช็คว่า application slug บน Authentik เป็น `poc` หรือไม่ (Caddy hardcode path `/application/o/poc/jwks/`)
-- **Browser ขึ้น `ERR_NAME_NOT_RESOLVED oidc-proxy` หรือ `supabase-kong`** — Server-side rewrite ใน `app/routes/auth.login.tsx` ไม่ทำงาน หรือ container `web` รันโค้ดเก่า ลอง `docker compose build web && docker compose up -d web` หรือสลับมาใช้ dev server ตามขั้นตอน [Local Development](#local-development)
-- **GoTrue แสดง Mailer error ใน docker log** — เป็น noise ปกติของ POC: `GOTRUE_MAILER_AUTOCONFIRM=true` ทำให้ signup ไม่ต้องส่งอีเมล แต่ login ผิด/reset password ยังพยายามต่อ SMTP และ fail
-- **กด SSO แล้ว Authentik แจ้ง redirect URI ไม่ตรง** — Provider ใน Authentik ต้องตั้ง redirect URI เป็น `http://localhost:8000/auth/v1/callback` ตรงๆ และ web app ต้องเข้าผ่าน port 3000 (ทั้ง Docker และ dev server)
+| อาการ | จุดตรวจ |
+| --- | --- |
+| `port is already allocated` | ตรวจพอร์ตที่ container อื่นเปิดด้วย `docker ps` ตัวอย่างเช่น หากย้ายพอร์ต Authentik ฝั่ง host จาก `9000` ให้แก้ `AUTHENTIK_AUTHORIZE_URL` ของ service `web` และใช้พอร์ตใหม่ตอนเปิดหน้า Authentik |
+| Authentik ตอบ `502` หรือ `404` ตอนเริ่มครั้งแรก | ตรวจ `docker compose logs --tail=100 authentik-server authentik-worker` แล้วเปิด `/if/flow/initial-setup/` อีกครั้งเมื่อ services พร้อม ให้คง `/` ท้าย URL |
+| Authentik แจ้งว่า redirect URI ไม่ตรง | ตั้ง **Strict** ให้ตรงกับ `http://localhost:8000/auth/v1/callback` ใช้ `localhost` ตาม URL ใน Compose |
+| Browser ไปที่ `oidc-proxy` หรือ `supabase-kong` | ตรวจ log ของ `web` กับ `supabase-auth` และตรวจว่าได้ใส่ credentials ของ Provider แล้วตามขั้นตอนที่ 4 |
+| กลับหน้า login หลังสร้างบัญชีหรือกรอกรหัสผ่าน หรือ SSO ขึ้น `PKCE code verifier not found in storage` | ตรวจว่า `web/package-lock.json` และ cookie adapter ใน `supabase.server.ts` ใช้ API รุ่นเดียวกัน รุ่น `@supabase/ssr@0.3.0` ใช้ `get`, `set` และ `remove`; รุ่นใหม่อาจใช้ interface ต่างกัน |
+| Auth callback แจ้งว่าแลก code กับ Authentik ไม่สำเร็จ | ตรวจว่า Provider เป็น **Confidential**, Client ID กับ Client Secret ตรงกับ `.env` และสร้าง `supabase-auth` ใหม่แล้ว ใช้ `docker compose logs --tail=100 supabase-auth oidc-proxy` ตรวจสาเหตุ |
+
+[ซอร์ส cookie adapter ของ @supabase/ssr v0.3.0](https://github.com/supabase/ssr/blob/v0.3.0/src/createServerClient.ts#L46-L121) · [cookie adapter ของเว็บ](web/app/utils/supabase.server.ts)
