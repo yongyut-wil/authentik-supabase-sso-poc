@@ -5,40 +5,21 @@ import { createSupabaseServerClient } from "../utils/supabase.server";
 export async function loader({ request }: Route.LoaderArgs) {
   const { supabase, headers } = createSupabaseServerClient(request);
   const { data: { user } } = await supabase.auth.getUser();
+  const url = new URL(request.url);
 
   if (user) {
     throw redirect("/", { headers });
   }
 
-  return null;
+  return {
+    error: url.searchParams.get("error"),
+  };
 }
 
 export async function action({ request }: Route.ActionArgs) {
   const { supabase, headers } = createSupabaseServerClient(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
-
-  if (intent === "login") {
-    const email = formData.get("email") as string;
-    const password = formData.get("password") as string;
-
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      return { error: error.message };
-    }
-    throw redirect("/", { headers });
-  }
-
-  if (intent === "register") {
-    const email = formData.get("email") as string;
-    const password = formData.get("password") as string;
-
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) {
-      return { error: error.message };
-    }
-    throw redirect("/", { headers });
-  }
 
   if (intent === "sso") {
     const origin = new URL(request.url).origin;
@@ -73,10 +54,34 @@ export async function action({ request }: Route.ActionArgs) {
     throw redirect(target, { headers });
   }
 
+  if (intent === "login") {
+    const email = formData.get("email") as string;
+    const password = formData.get("password") as string;
+
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      return { error: error.message };
+    }
+    throw redirect("/", { headers });
+  }
+
+  if (intent === "register") {
+    const email = formData.get("email") as string;
+    const password = formData.get("password") as string;
+
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) {
+      return { error: error.message };
+    }
+    throw redirect("/", { headers });
+  }
+
   return { error: "Invalid action" };
 }
 
-export default function Login({ actionData }: Route.ComponentProps) {
+export default function Login({ actionData, loaderData }: Route.ComponentProps) {
+  const error = actionData?.error ?? loaderData?.error;
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 px-4 sm:px-6 lg:px-8 font-sans relative overflow-hidden">
       {/* Background Orbs */}
@@ -97,12 +102,12 @@ export default function Login({ actionData }: Route.ComponentProps) {
         </div>
 
         {/* Error Alert */}
-        {actionData?.error && (
+        {error && (
           <div className="mb-6 p-4 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-center gap-3">
             <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
-            <span className="font-medium">{actionData.error}</span>
+            <span className="font-medium">{error}</span>
           </div>
         )}
 

@@ -7,11 +7,22 @@ export async function loader({ request }: Route.LoaderArgs) {
   const code = url.searchParams.get("code");
   const idpError = url.searchParams.get("error");
   const idpErrorDescription = url.searchParams.get("error_description");
-  const next = url.searchParams.get("next") ?? "/";
+  const requestedNext = url.searchParams.get("next") || "/";
+  const nextUrl = new URL(requestedNext, url.origin);
+  const next =
+    nextUrl.origin === url.origin
+      ? `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`
+      : "/";
 
   if (idpError) {
-    console.error("[auth.callback] IdP returned error", idpError, idpErrorDescription);
-    return redirect(`/auth/login?error=${encodeURIComponent(idpErrorDescription || idpError)}`);
+    console.error(
+      "[auth.callback] IdP returned error",
+      idpError,
+      idpErrorDescription
+    );
+    return redirect(
+      `/auth/login?error=${encodeURIComponent(idpErrorDescription || idpError)}`
+    );
   }
 
   if (!code) {
@@ -24,7 +35,9 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   if (error) {
     console.error("[auth.callback] exchangeCodeForSession failed", error);
-    return redirect(`/auth/login?error=${encodeURIComponent(error.message)}`);
+    return redirect(`/auth/login?error=${encodeURIComponent(error.message)}`, {
+      headers,
+    });
   }
 
   return redirect(next, { headers });

@@ -5,26 +5,29 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLoaderData,
 } from "react-router";
-import { useLoaderData } from "react-router";
 
 import type { Route } from "./+types/root";
 import stylesheet from "./app.css?url";
+import { getSupabaseServerEnv } from "./utils/supabase.env.server";
 
 export const links: Route.LinksFunction = () => [
   { rel: "stylesheet", href: stylesheet },
 ];
 
 export async function loader() {
+  const { SUPABASE_URL, SUPABASE_ANON_KEY } = getSupabaseServerEnv();
+
   return {
     env: {
-      SUPABASE_URL: process.env.SUPABASE_URL,
-      SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+      SUPABASE_URL,
+      SUPABASE_ANON_KEY,
     },
   };
 }
 
-export function Layout({ children }: { children: React.ReactNode }) {
+export function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
   const data = useLoaderData<typeof loader>();
 
   return (

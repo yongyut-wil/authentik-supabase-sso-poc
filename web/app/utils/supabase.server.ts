@@ -1,8 +1,11 @@
 import * as supabaseSsr from '@supabase/ssr'
+import { getSupabaseServerEnv } from './supabase.env.server'
 
 // Handle CommonJS / ESM default export interop for Vite SSR
-const supabaseSsrModule = supabaseSsr as any;
-const createServerClient = supabaseSsrModule.createServerClient || supabaseSsrModule.default?.createServerClient;
+const supabaseSsrModule = supabaseSsr as any
+const createServerClient =
+  supabaseSsrModule.createServerClient ||
+  supabaseSsrModule.default?.createServerClient
 
 function parseCookies(cookieHeader: string) {
   if (!cookieHeader) {
@@ -53,7 +56,10 @@ function serializeCookie(
   parts.push(`Path=${options.path ?? '/'}`)
 
   if (options.expires) {
-    const expires = options.expires instanceof Date ? options.expires.toUTCString() : options.expires
+    const expires =
+      options.expires instanceof Date
+        ? options.expires.toUTCString()
+        : options.expires
     parts.push(`Expires=${expires}`)
   }
 
@@ -66,7 +72,11 @@ function serializeCookie(
   }
 
   if (options.sameSite) {
-    const sameSite = options.sameSite === true ? 'Lax' : `${options.sameSite}`.charAt(0).toUpperCase() + `${options.sameSite}`.slice(1)
+    const sameSite =
+      options.sameSite === true
+        ? 'Lax'
+        : `${options.sameSite}`.charAt(0).toUpperCase() +
+          `${options.sameSite}`.slice(1)
     parts.push(`SameSite=${sameSite}`)
   }
 
@@ -75,23 +85,24 @@ function serializeCookie(
 
 export function createSupabaseServerClient(request: Request) {
   const headers = new Headers()
+  const { SUPABASE_URL: supabaseUrl, SUPABASE_ANON_KEY: supabaseKey } =
+    getSupabaseServerEnv()
 
-  const supabaseUrl = process.env.SUPABASE_URL!
-  const supabaseKey = process.env.SUPABASE_ANON_KEY!
-
-  // @supabase/ssr v0.3 expects the legacy per-cookie adapter (get/set/remove),
-  // not the v0.5+ getAll/setAll API.
+  // @supabase/ssr v0.3 uses the per-cookie adapter, not getAll/setAll.
   const supabase = createServerClient(supabaseUrl, supabaseKey, {
     cookies: {
       get(name: string) {
         const cookies = parseCookies(request.headers.get('Cookie') ?? '')
-        return cookies.find((c) => c.name === name)?.value
+        return cookies.find((cookie) => cookie.name === name)?.value
       },
       set(name: string, value: string, options: any) {
         headers.append('Set-Cookie', serializeCookie(name, value, options))
       },
       remove(name: string, options: any) {
-        headers.append('Set-Cookie', serializeCookie(name, '', { ...options, maxAge: 0 }))
+        headers.append(
+          'Set-Cookie',
+          serializeCookie(name, '', { ...options, maxAge: 0 })
+        )
       },
     },
   })
